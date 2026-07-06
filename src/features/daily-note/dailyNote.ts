@@ -14,6 +14,8 @@ export interface ActiveTrackingTask {
 	isRangeActive: boolean;
 	isCompleted: boolean;
 	isUpcoming?: boolean;
+	isStartAbsolute: boolean; // !14:00
+	isEndAbsolute?: boolean; // 15:00!
 }
 
 export function getDailyNoteConfig(): {
@@ -57,12 +59,12 @@ export async function getActiveTrackingTasks(
 	const todayStr = now.format("YYYY-MM-DD");
 
 	// Pattern definitions for parsing tasks in daily note
-	// 1. Range format: - [ ] 14:00 - 15:00 Task description (checkbox optional)
+	// 1. Range format: - [ ] (!)14:00 - 15:00(!) Task description (checkbox optional)
 	const rangeRegex =
-		/^\s*-\s*(?:\[\s*([xX\s])\s*\])?\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})\s+(.*)$/;
-	// 2. Start only format: - [ ] 14:00 Task description (checkbox optional, avoiding range pattern matching)
+		/^\s*-\s*(?:\[\s*(?<checkbox>[xX\s])\s*\])?\s+(?<absStart>!)?(?<start>\d{2}:\d{2})\s*-\s*(?<end>\d{2}:\d{2})(?<absEnd>!)?(?<text>.*)$/;
+	// 2. Start only format: - [ ] (!)14:00 Task description (checkbox optional, avoiding range pattern matching)
 	const startOnlyRegex =
-		/^\s*-\s*(?:\[\s*([xX\s])\s*\])?\s*(\d{2}:\d{2})(?!\s*-\s*\d{2}:\d{2})\s+(.*)$/;
+		/^\s*-\s*(?:\[\s*(?<checkbox>[xX\s])\s*\])?\s+(?<absStart>!)?(?<start>\d{2}:\d{2})(?!\s*-\s*\d{2}:\d{2})(?<text>.*)$/;
 
 	const activeTasks: ActiveTrackingTask[] = [];
 	let isInCodeBlock = false;
@@ -82,18 +84,20 @@ export async function getActiveTrackingTasks(
 		const startMatch = line.match(startOnlyRegex);
 
 		if (
-			rangeMatch &&
-			rangeMatch[2] !== undefined &&
-			rangeMatch[3] !== undefined &&
-			rangeMatch[4] !== undefined
+			rangeMatch?.groups &&
+			rangeMatch.groups.start !== undefined &&
+			rangeMatch.groups.end !== undefined &&
+			rangeMatch.groups.text !== undefined
 		) {
-			const checkbox = rangeMatch[1] ? rangeMatch[1].trim() : "";
+			const checkbox = rangeMatch.groups.checkbox
+				? rangeMatch.groups.checkbox.trim()
+				: "";
 			const isCompleted = checkbox === "x" || checkbox === "X";
 			if (isCompleted) continue;
 
-			const startTimeStr = rangeMatch[2];
-			const endTimeStr = rangeMatch[3];
-			const taskText = rangeMatch[4].trim();
+			const startTimeStr = rangeMatch.groups.start;
+			const endTimeStr = rangeMatch.groups.end;
+			const taskText = rangeMatch.groups.text.trim();
 
 			const start = moment(`${todayStr} ${startTimeStr}`, "YYYY-MM-DD HH:mm");
 			const end = moment(`${todayStr} ${endTimeStr}`, "YYYY-MM-DD HH:mm");
@@ -112,6 +116,8 @@ export async function getActiveTrackingTasks(
 					lineNumber: i,
 					isRangeActive: isWithinRange,
 					isCompleted: false,
+					isStartAbsolute: !!rangeMatch.groups.absStart,
+					isEndAbsolute: !!rangeMatch.groups.absEnd,
 				});
 			} else if (isUpcoming) {
 				activeTasks.push({
@@ -122,19 +128,23 @@ export async function getActiveTrackingTasks(
 					isRangeActive: false,
 					isCompleted: false,
 					isUpcoming: true,
+					isStartAbsolute: !!rangeMatch.groups.absStart,
+					isEndAbsolute: !!rangeMatch.groups.absEnd,
 				});
 			}
 		} else if (
-			startMatch &&
-			startMatch[2] !== undefined &&
-			startMatch[3] !== undefined
+			startMatch?.groups &&
+			startMatch.groups.start !== undefined &&
+			startMatch.groups.text !== undefined
 		) {
-			const checkbox = startMatch[1] ? startMatch[1].trim() : "";
+			const checkbox = startMatch.groups.checkbox
+				? startMatch.groups.checkbox.trim()
+				: "";
 			const isCompleted = checkbox === "x" || checkbox === "X";
 			if (isCompleted) continue;
 
-			const startTimeStr = startMatch[2];
-			const taskText = startMatch[3].trim();
+			const startTimeStr = startMatch.groups.start;
+			const taskText = startMatch.groups.text.trim();
 
 			const start = moment(`${todayStr} ${startTimeStr}`, "YYYY-MM-DD HH:mm");
 			const isStarted = now.isSameOrAfter(start);
@@ -153,6 +163,7 @@ export async function getActiveTrackingTasks(
 					lineNumber: i,
 					isRangeActive: isWithinThreshold,
 					isCompleted: false,
+					isStartAbsolute: !!startMatch.groups.absStart,
 				});
 			} else if (isUpcoming) {
 				activeTasks.push({
@@ -162,6 +173,7 @@ export async function getActiveTrackingTasks(
 					isRangeActive: false,
 					isCompleted: false,
 					isUpcoming: true,
+					isStartAbsolute: !!startMatch.groups.absStart,
 				});
 			}
 		}
@@ -216,7 +228,9 @@ export function isTasksEqual(
 			ta.lineNumber !== tb.lineNumber ||
 			ta.isRangeActive !== tb.isRangeActive ||
 			ta.isCompleted !== tb.isCompleted ||
-			ta.isUpcoming !== tb.isUpcoming
+			ta.isUpcoming !== tb.isUpcoming ||
+			ta.isStartAbsolute !== tb.isStartAbsolute ||
+			ta.isEndAbsolute !== tb.isEndAbsolute
 		) {
 			return false;
 		}
@@ -444,10 +458,11 @@ export function toggleTaskTime(editor: Editor) {
 
 	// Pattern definitions for line parsing
 	const rangeRegex =
-		/^(\s*)-\s*(?:\[\s*.\s*\])?\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})\s*(.*)$/;
-	const startOnlyRegex = /^(\s*)-\s*(?:\[\s*.\s*\])?\s*(\d{2}:\d{2})\s*(.*)$/;
-	const taskRegex = /^(\s*)-\s*\[\s*.\s*\]\s*(.*)$/;
-	const bulletRegex = /^(\s*)-\s*(.*)$/;
+		/^(?<indent>\s*)-\s*(?:\[\s*.\s*\])?\s*(?<absStart>!)?(?<start>\d{2}:\d{2})\s*-\s*(?<end>\d{2}:\d{2})(?<absEnd>!)?\s*(?<content>.*)$/;
+	const startOnlyRegex =
+		/^(?<indent>\s*)-\s*(?:\[\s*.\s*\])?\s*(?<absStart>!)?(?<start>\d{2}:\d{2})\s*(?<content>.*)$/;
+	const taskRegex = /^(?<indent>\s*)-\s*\[\s*.\s*\]\s*(?<content>.*)$/;
+	const bulletRegex = /^(?<indent>\s*)-\s*(?<content>.*)$/;
 
 	let newLineText = "";
 
@@ -457,40 +472,43 @@ export function toggleTaskTime(editor: Editor) {
 	const bulletMatch = lineText.match(bulletRegex);
 
 	if (
-		rangeMatch &&
-		rangeMatch[1] !== undefined &&
-		rangeMatch[2] !== undefined &&
-		rangeMatch[4] !== undefined
+		rangeMatch?.groups &&
+		rangeMatch.groups.indent !== undefined &&
+		rangeMatch.groups.start !== undefined &&
+		rangeMatch.groups.content !== undefined
 	) {
-		const indent = rangeMatch[1];
-		const startTime = rangeMatch[2];
-		const content = rangeMatch[4];
-		newLineText = `${indent}- [x] ${startTime} - ${currentTime} ${content}`;
+		const indent = rangeMatch.groups.indent;
+		const startTime = rangeMatch.groups.start;
+		const content = rangeMatch.groups.content;
+		const absStart = rangeMatch.groups.absStart ?? "";
+		const absEnd = rangeMatch.groups.absEnd ?? "";
+		newLineText = `${indent}- [x] ${absStart}${startTime} - ${currentTime}${absEnd} ${content}`;
 	} else if (
-		startMatch &&
-		startMatch[1] !== undefined &&
-		startMatch[2] !== undefined &&
-		startMatch[3] !== undefined
+		startMatch?.groups &&
+		startMatch.groups.indent !== undefined &&
+		startMatch.groups.start !== undefined &&
+		startMatch.groups.content !== undefined
 	) {
-		const indent = startMatch[1];
-		const startTime = startMatch[2];
-		const content = startMatch[3];
-		newLineText = `${indent}- [x] ${startTime} - ${currentTime} ${content}`;
+		const indent = startMatch.groups.indent;
+		const startTime = startMatch.groups.start;
+		const content = startMatch.groups.content;
+		const absStart = startMatch.groups.absStart ?? "";
+		newLineText = `${indent}- [x] ${absStart}${startTime} - ${currentTime} ${content}`;
 	} else if (
-		taskMatch &&
-		taskMatch[1] !== undefined &&
-		taskMatch[2] !== undefined
+		taskMatch?.groups &&
+		taskMatch.groups.indent !== undefined &&
+		taskMatch.groups.content !== undefined
 	) {
-		const indent = taskMatch[1];
-		const content = taskMatch[2];
+		const indent = taskMatch.groups.indent;
+		const content = taskMatch.groups.content;
 		newLineText = `${indent}- [ ] ${currentTime} ${content}`;
 	} else if (
-		bulletMatch &&
-		bulletMatch[1] !== undefined &&
-		bulletMatch[2] !== undefined
+		bulletMatch?.groups &&
+		bulletMatch.groups.indent !== undefined &&
+		bulletMatch.groups.content !== undefined
 	) {
-		const indent = bulletMatch[1];
-		const content = bulletMatch[2];
+		const indent = bulletMatch.groups.indent;
+		const content = bulletMatch.groups.content;
 		newLineText = `${indent}- [ ] ${currentTime} ${content}`;
 	} else {
 		const content = lineText.trim();
