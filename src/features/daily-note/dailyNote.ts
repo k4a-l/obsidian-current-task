@@ -449,7 +449,7 @@ export function updateBannerContent(
 	}
 }
 
-export function toggleTaskTime(editor: Editor) {
+export function completeThisTaskNow(editor: Editor) {
 	const cursor = editor.getCursor();
 	const lineIndex = cursor.line;
 	const lineText = editor.getLine(lineIndex);
@@ -501,7 +501,8 @@ export function toggleTaskTime(editor: Editor) {
 	) {
 		const indent = taskMatch.groups.indent;
 		const content = taskMatch.groups.content;
-		newLineText = `${indent}- [ ] ${currentTime} ${content}`;
+		// No start time exists, so record an end-only range: "- [x] - hh:mm"
+		newLineText = `${indent}- [x] - ${currentTime} ${content}`;
 	} else if (
 		bulletMatch?.groups &&
 		bulletMatch.groups.indent !== undefined &&
@@ -509,15 +510,15 @@ export function toggleTaskTime(editor: Editor) {
 	) {
 		const indent = bulletMatch.groups.indent;
 		const content = bulletMatch.groups.content;
-		newLineText = `${indent}- [ ] ${currentTime} ${content}`;
+		newLineText = `${indent}- [x] - ${currentTime} ${content}`;
 	} else {
 		const content = lineText.trim();
 		const indentMatch = lineText.match(/^(\s*)/);
 		const indent = indentMatch?.[1] || "";
 		if (content) {
-			newLineText = `${indent}- [ ] ${currentTime} ${content}`;
+			newLineText = `${indent}- [x] - ${currentTime} ${content}`;
 		} else {
-			newLineText = `${indent}- [ ] ${currentTime} `;
+			newLineText = `${indent}- [x] - ${currentTime} `;
 		}
 	}
 
@@ -530,28 +531,52 @@ function buildCheckboxPrefix(check: string | undefined): string {
 	return check !== undefined ? `[${check}] ` : "";
 }
 
+// Parse a relative duration token (e.g. "10m", "2h", "1h30m", "90m") into minutes.
+function parseRelativeDurationToMinutes(dur: string): number {
+	let total = 0;
+	const h = dur.match(/(\d+)h/);
+	const m = dur.match(/(\d+)m/);
+	if (h?.[1]) total += parseInt(h[1], 10) * 60;
+	if (m?.[1]) total += parseInt(m[1], 10);
+	return total;
+}
+
 /**
- * Set the current time as the task's start time.
- * For a range task, the end time is shifted by the same amount so the
- * duration is preserved (e.g. at 10:45, "- 11:00 - 12:00" -> "- 10:45 - 11:45").
- * For a start-only task, only the start time is replaced.
- * Checkbox state and "!" absolute flags are preserved.
+ * Start a task "now": set the current time as its start time, branching on the
+ * shape of the current line.
+ *  - Range task ("- 11:00 - 12:00")     -> shift both ends, keeping the duration.
+ *  - Relative duration ("- 10m Task")   -> now .. now+duration absolute range.
+ *  - Start-only task ("- 11:00 Task")   -> replace the start time with now.
+ *  - Task with checkbox but no time     -> add the start time, keep the checkbox.
+ *  - Plain bullet / plain text          -> turn it into a task with the start time.
+ * Existing checkbox state and "!" absolute flags are preserved.
  */
-export function changeStartTime(editor: Editor) {
+export function startThisTaskNow(editor: Editor) {
 	const cursor = editor.getCursor();
 	const lineIndex = cursor.line;
 	const lineText = editor.getLine(lineIndex);
 
 	const currentTime = moment().format("HH:mm");
 
-	// Range must be tested before start-only (start-only would also match a range prefix)
+	// Ordered from most specific to least; range must precede start-only, and
+	// time/duration patterns must precede the bare task/bullet fallbacks.
 	const rangeRegex =
 		/^(?<indent>\s*)-\s*(?:\[\s*(?<check>.)\s*\])?\s*(?<absStart>!)?(?<start>\d{2}:\d{2})\s*-\s*(?<end>\d{2}:\d{2})(?<absEnd>!)?\s*(?<content>.*)$/;
+	const relativeRegex =
+		/^(?<indent>\s*)-\s*(?:\[\s*(?<check>.)\s*\])?\s*(?<absStart>!)?(?<dur>\d+h\d+m|\d+h|\d+m)(?=\s|$)\s*(?<content>.*)$/;
 	const startOnlyRegex =
 		/^(?<indent>\s*)-\s*(?:\[\s*(?<check>.)\s*\])?\s*(?<absStart>!)?(?<start>\d{2}:\d{2})\s*(?<content>.*)$/;
+	const taskRegex =
+		/^(?<indent>\s*)-\s*\[\s*(?<check>.)\s*\]\s*(?<content>.*)$/;
+	const bulletRegex = /^(?<indent>\s*)-\s*(?<content>.*)$/;
 
 	const rangeMatch = lineText.match(rangeRegex);
+	const relativeMatch = lineText.match(relativeRegex);
 	const startMatch = lineText.match(startOnlyRegex);
+	const taskMatch = lineText.match(taskRegex);
+	const bulletMatch = lineText.match(bulletRegex);
+
+	let newLineText = "";
 
 	if (
 		rangeMatch?.groups &&
@@ -570,8 +595,19 @@ export function changeStartTime(editor: Editor) {
 		const cb = buildCheckboxPrefix(g.check);
 		const absStart = g.absStart ?? "";
 		const absEnd = g.absEnd ?? "";
-		const newLineText = `${g.indent}- ${cb}${absStart}${currentTime} - ${newEnd}${absEnd} ${g.content}`;
-		editor.setLine(lineIndex, newLineText);
+		newLineText = `${g.indent}- ${cb}${absStart}${currentTime} - ${newEnd}${absEnd} ${g.content}`;
+	} else if (
+		relativeMatch?.groups &&
+		relativeMatch.groups.indent !== undefined &&
+		relativeMatch.groups.dur !== undefined &&
+		relativeMatch.groups.content !== undefined
+	) {
+		const g = relativeMatch.groups;
+		const durationMin = parseRelativeDurationToMinutes(g.dur ?? "");
+		const endStr = moment().add(durationMin, "minutes").format("HH:mm");
+		const cb = buildCheckboxPrefix(g.check);
+		const absStart = g.absStart ?? "";
+		newLineText = `${g.indent}- ${cb}${absStart}${currentTime} - ${endStr} ${g.content}`;
 	} else if (
 		startMatch?.groups &&
 		startMatch.groups.indent !== undefined &&
@@ -581,55 +617,31 @@ export function changeStartTime(editor: Editor) {
 		const g = startMatch.groups;
 		const cb = buildCheckboxPrefix(g.check);
 		const absStart = g.absStart ?? "";
-		const newLineText = `${g.indent}- ${cb}${absStart}${currentTime} ${g.content}`;
-		editor.setLine(lineIndex, newLineText);
-	}
-}
-
-// Parse a relative duration token (e.g. "10m", "2h", "1h30m", "90m") into minutes.
-function parseRelativeDurationToMinutes(dur: string): number {
-	let total = 0;
-	const h = dur.match(/(\d+)h/);
-	const m = dur.match(/(\d+)m/);
-	if (h?.[1]) total += parseInt(h[1], 10) * 60;
-	if (m?.[1]) total += parseInt(m[1], 10);
-	return total;
-}
-
-/**
- * Convert a relative-duration task into an absolute time range.
- * "- 10m Task" at 10:45 becomes "- 10:45 - 10:55 Task".
- * Supports "Xh", "Ym" and combined "XhYm" (e.g. 90m -> 1h30m).
- * Checkbox state and a leading "!" absolute flag are preserved.
- */
-export function convertRelativeToAbsolute(editor: Editor) {
-	const cursor = editor.getCursor();
-	const lineIndex = cursor.line;
-	const lineText = editor.getLine(lineIndex);
-
-	const relativeRegex =
-		/^(?<indent>\s*)-\s*(?:\[\s*(?<check>.)\s*\])?\s*(?<absStart>!)?(?<dur>\d+h\d+m|\d+h|\d+m)(?=\s|$)\s*(?<content>.*)$/;
-	const match = lineText.match(relativeRegex);
-
-	if (
-		!match?.groups ||
-		match.groups.indent === undefined ||
-		match.groups.dur === undefined ||
-		match.groups.content === undefined
+		newLineText = `${g.indent}- ${cb}${absStart}${currentTime} ${g.content}`;
+	} else if (
+		taskMatch?.groups &&
+		taskMatch.groups.indent !== undefined &&
+		taskMatch.groups.content !== undefined
 	) {
-		return;
+		const g = taskMatch.groups;
+		const cb = buildCheckboxPrefix(g.check);
+		newLineText = `${g.indent}- ${cb}${currentTime} ${g.content}`;
+	} else if (
+		bulletMatch?.groups &&
+		bulletMatch.groups.indent !== undefined &&
+		bulletMatch.groups.content !== undefined
+	) {
+		const g = bulletMatch.groups;
+		newLineText = `${g.indent}- [ ] ${currentTime} ${g.content}`;
+	} else {
+		const content = lineText.trim();
+		const indentMatch = lineText.match(/^(\s*)/);
+		const indent = indentMatch?.[1] ?? "";
+		newLineText = content
+			? `${indent}- [ ] ${currentTime} ${content}`
+			: `${indent}- [ ] ${currentTime} `;
 	}
 
-	const g = match.groups;
-	const durationMin = parseRelativeDurationToMinutes(g.dur ?? "");
-
-	const start = moment();
-	const startStr = start.format("HH:mm");
-	const endStr = start.clone().add(durationMin, "minutes").format("HH:mm");
-
-	const cb = buildCheckboxPrefix(g.check);
-	const absStart = g.absStart ?? "";
-	const newLineText = `${g.indent}- ${cb}${absStart}${startStr} - ${endStr} ${g.content}`;
 	editor.setLine(lineIndex, newLineText);
 }
 

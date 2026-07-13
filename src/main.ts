@@ -6,9 +6,8 @@ import {
 import { TaskExtractor } from "./features/active-note/TaskExtractor";
 import { DailyNoteTaskManager } from "./features/daily-note/DailyNoteTaskManager";
 import {
-	changeStartTime,
-	convertRelativeToAbsolute,
-	toggleTaskTime,
+	completeThisTaskNow,
+	startThisTaskNow,
 } from "./features/daily-note/dailyNote";
 import {
 	DEFAULT_SETTINGS,
@@ -36,28 +35,22 @@ export default class PluginClass extends Plugin {
 
 		// Add time toggle command
 		this.addCommand({
-			id: "set-end-task-time",
-			name: "Set current time as task `end` time and complete",
+			id: "complete-this-task-now",
+			name: "Complete this task now",
 			editorCallback: (editor) => {
-				toggleTaskTime(editor);
+				completeThisTaskNow(editor);
 			},
 		});
 
-		// Set current time as the task's start time (keeps range duration)
+		// Start the task "now": set the current time as the start time.
+		// Branches internally: shifts a range (keeping its duration), expands a
+		// relative duration (e.g. "10m") into a range, replaces a start-only time,
+		// or turns a plain line into a timed task.
 		this.addCommand({
-			id: "set-task-start-time",
-			name: "Set current time as task `start` time",
+			id: "start-this-task-now",
+			name: "Start this task now",
 			editorCallback: (editor) => {
-				changeStartTime(editor);
-			},
-		});
-
-		// Convert a relative-duration task (e.g. "10m") into an absolute time range
-		this.addCommand({
-			id: "convert-duration-to-time-range",
-			name: "Convert duration task to time range",
-			editorCallback: (editor) => {
-				convertRelativeToAbsolute(editor);
+				startThisTaskNow(editor);
 			},
 		});
 
