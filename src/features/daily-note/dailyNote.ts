@@ -524,6 +524,115 @@ export function toggleTaskTime(editor: Editor) {
 	editor.setLine(lineIndex, newLineText);
 }
 
+// Rebuild the checkbox prefix (e.g. "[x] ") from a captured checkbox char,
+// preserving the original state. Returns "" when the task has no checkbox.
+function buildCheckboxPrefix(check: string | undefined): string {
+	return check !== undefined ? `[${check}] ` : "";
+}
+
+/**
+ * Set the current time as the task's start time.
+ * For a range task, the end time is shifted by the same amount so the
+ * duration is preserved (e.g. at 10:45, "- 11:00 - 12:00" -> "- 10:45 - 11:45").
+ * For a start-only task, only the start time is replaced.
+ * Checkbox state and "!" absolute flags are preserved.
+ */
+export function changeStartTime(editor: Editor) {
+	const cursor = editor.getCursor();
+	const lineIndex = cursor.line;
+	const lineText = editor.getLine(lineIndex);
+
+	const currentTime = moment().format("HH:mm");
+
+	// Range must be tested before start-only (start-only would also match a range prefix)
+	const rangeRegex =
+		/^(?<indent>\s*)-\s*(?:\[\s*(?<check>.)\s*\])?\s*(?<absStart>!)?(?<start>\d{2}:\d{2})\s*-\s*(?<end>\d{2}:\d{2})(?<absEnd>!)?\s*(?<content>.*)$/;
+	const startOnlyRegex =
+		/^(?<indent>\s*)-\s*(?:\[\s*(?<check>.)\s*\])?\s*(?<absStart>!)?(?<start>\d{2}:\d{2})\s*(?<content>.*)$/;
+
+	const rangeMatch = lineText.match(rangeRegex);
+	const startMatch = lineText.match(startOnlyRegex);
+
+	if (
+		rangeMatch?.groups &&
+		rangeMatch.groups.indent !== undefined &&
+		rangeMatch.groups.start !== undefined &&
+		rangeMatch.groups.end !== undefined &&
+		rangeMatch.groups.content !== undefined
+	) {
+		const g = rangeMatch.groups;
+		const start = moment(g.start, "HH:mm");
+		const end = moment(g.end, "HH:mm");
+		let durationMin = end.diff(start, "minutes");
+		if (durationMin < 0) durationMin += 24 * 60; // treat as overnight range
+
+		const newEnd = moment().add(durationMin, "minutes").format("HH:mm");
+		const cb = buildCheckboxPrefix(g.check);
+		const absStart = g.absStart ?? "";
+		const absEnd = g.absEnd ?? "";
+		const newLineText = `${g.indent}- ${cb}${absStart}${currentTime} - ${newEnd}${absEnd} ${g.content}`;
+		editor.setLine(lineIndex, newLineText);
+	} else if (
+		startMatch?.groups &&
+		startMatch.groups.indent !== undefined &&
+		startMatch.groups.start !== undefined &&
+		startMatch.groups.content !== undefined
+	) {
+		const g = startMatch.groups;
+		const cb = buildCheckboxPrefix(g.check);
+		const absStart = g.absStart ?? "";
+		const newLineText = `${g.indent}- ${cb}${absStart}${currentTime} ${g.content}`;
+		editor.setLine(lineIndex, newLineText);
+	}
+}
+
+// Parse a relative duration token (e.g. "10m", "2h", "1h30m", "90m") into minutes.
+function parseRelativeDurationToMinutes(dur: string): number {
+	let total = 0;
+	const h = dur.match(/(\d+)h/);
+	const m = dur.match(/(\d+)m/);
+	if (h?.[1]) total += parseInt(h[1], 10) * 60;
+	if (m?.[1]) total += parseInt(m[1], 10);
+	return total;
+}
+
+/**
+ * Convert a relative-duration task into an absolute time range.
+ * "- 10m Task" at 10:45 becomes "- 10:45 - 10:55 Task".
+ * Supports "Xh", "Ym" and combined "XhYm" (e.g. 90m -> 1h30m).
+ * Checkbox state and a leading "!" absolute flag are preserved.
+ */
+export function convertRelativeToAbsolute(editor: Editor) {
+	const cursor = editor.getCursor();
+	const lineIndex = cursor.line;
+	const lineText = editor.getLine(lineIndex);
+
+	const relativeRegex =
+		/^(?<indent>\s*)-\s*(?:\[\s*(?<check>.)\s*\])?\s*(?<absStart>!)?(?<dur>\d+h\d+m|\d+h|\d+m)(?=\s|$)\s*(?<content>.*)$/;
+	const match = lineText.match(relativeRegex);
+
+	if (
+		!match?.groups ||
+		match.groups.indent === undefined ||
+		match.groups.dur === undefined ||
+		match.groups.content === undefined
+	) {
+		return;
+	}
+
+	const g = match.groups;
+	const durationMin = parseRelativeDurationToMinutes(g.dur ?? "");
+
+	const start = moment();
+	const startStr = start.format("HH:mm");
+	const endStr = start.clone().add(durationMin, "minutes").format("HH:mm");
+
+	const cb = buildCheckboxPrefix(g.check);
+	const absStart = g.absStart ?? "";
+	const newLineText = `${g.indent}- ${cb}${absStart}${startStr} - ${endStr} ${g.content}`;
+	editor.setLine(lineIndex, newLineText);
+}
+
 function parseMarkdownAndWikiLinks(
 	text: string,
 	parentEl: HTMLElement,

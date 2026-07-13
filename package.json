@@ -14,7 +14,7 @@
 		"coverage": "vitest run --coverage",
 		"lint": "biome lint --write",
 		"format": "biome format --write && remark . --output",
-		"check": "biome check --write  --diagnostic-level=warn",
+		"check": "biome check --write",
 		"ci": "biome ci --diagnostic-level=warn",
 		"prepare": "husky"
 	},

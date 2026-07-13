@@ -5,7 +5,11 @@ import {
 } from "./features/active-note/ActiveNoteTaskView";
 import { TaskExtractor } from "./features/active-note/TaskExtractor";
 import { DailyNoteTaskManager } from "./features/daily-note/DailyNoteTaskManager";
-import { toggleTaskTime } from "./features/daily-note/dailyNote";
+import {
+	changeStartTime,
+	convertRelativeToAbsolute,
+	toggleTaskTime,
+} from "./features/daily-note/dailyNote";
 import {
 	DEFAULT_SETTINGS,
 	type TasksPluginSettings,
@@ -32,10 +36,28 @@ export default class PluginClass extends Plugin {
 
 		// Add time toggle command
 		this.addCommand({
-			id: "toggle-task-time",
-			name: "Toggle/Update task time",
+			id: "set-end-task-time",
+			name: "Set current time as task `end` time and complete",
 			editorCallback: (editor) => {
 				toggleTaskTime(editor);
+			},
+		});
+
+		// Set current time as the task's start time (keeps range duration)
+		this.addCommand({
+			id: "set-task-start-time",
+			name: "Set current time as task `start` time",
+			editorCallback: (editor) => {
+				changeStartTime(editor);
+			},
+		});
+
+		// Convert a relative-duration task (e.g. "10m") into an absolute time range
+		this.addCommand({
+			id: "convert-duration-to-time-range",
+			name: "Convert duration task to time range",
+			editorCallback: (editor) => {
+				convertRelativeToAbsolute(editor);
 			},
 		});
 
