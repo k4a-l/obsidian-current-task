@@ -5,6 +5,7 @@ import {
 	getDailyNote,
 	getDailyNoteSettings,
 } from "obsidian-daily-notes-interface";
+import { absoluteFlag, buildCheckboxPrefix, parseTaskLine } from "./taskLine";
 
 export interface ActiveTrackingTask {
 	taskText: string;
@@ -54,17 +55,33 @@ export async function getActiveTrackingTasks(
 	if (!file) return [];
 
 	const content = await app.vault.cachedRead(file);
+	return extractActiveTrackingTasks(
+		content,
+		warningThreshold,
+		upcomingThreshold,
+	);
+}
+
+// Only blank / x / X checkboxes are treated as trackable tasks; any other
+// custom status (e.g. "[-]", "[/]") is ignored, matching the legacy behavior.
+function isTrackableCheckbox(check: string | undefined): boolean {
+	return check === undefined || /^[xX\s]$/.test(check);
+}
+
+/**
+ * Pure core of {@link getActiveTrackingTasks}: given daily-note text, return the
+ * currently active/upcoming tracking tasks. Only range and start-only timed
+ * tasks are tracked; completed ("[x]") lines are skipped. Time comparisons use
+ * the current wall-clock (`moment()`), so callers control it via the system clock.
+ */
+export function extractActiveTrackingTasks(
+	content: string,
+	warningThreshold: number,
+	upcomingThreshold: number,
+): ActiveTrackingTask[] {
 	const lines = content.split("\n");
 	const now = moment();
 	const todayStr = now.format("YYYY-MM-DD");
-
-	// Pattern definitions for parsing tasks in daily note
-	// 1. Range format: - [ ] (!)14:00 - 15:00(!) Task description (checkbox optional)
-	const rangeRegex =
-		/^\s*-\s*(?:\[\s*(?<checkbox>[xX\s])\s*\])?\s+(?<absStart>!)?(?<start>\d{2}:\d{2})\s*-\s*(?<end>\d{2}:\d{2})(?<absEnd>!)?(?<text>.*)$/;
-	// 2. Start only format: - [ ] (!)14:00 Task description (checkbox optional, avoiding range pattern matching)
-	const startOnlyRegex =
-		/^\s*-\s*(?:\[\s*(?<checkbox>[xX\s])\s*\])?\s+(?<absStart>!)?(?<start>\d{2}:\d{2})(?!\s*-\s*\d{2}:\d{2})(?<text>.*)$/;
 
 	const activeTasks: ActiveTrackingTask[] = [];
 	let isInCodeBlock = false;
@@ -80,33 +97,26 @@ export async function getActiveTrackingTasks(
 		}
 		if (isInCodeBlock) continue;
 
-		const rangeMatch = line.match(rangeRegex);
-		const startMatch = line.match(startOnlyRegex);
+		const parsed = parseTaskLine(line);
+		if (!parsed) continue;
+		// Only timed start-bearing tasks show in the banner.
+		if (parsed.kind !== "range" && parsed.kind !== "startOnly") continue;
+		if (!isTrackableCheckbox(parsed.check)) continue;
+		if (parsed.check === "x" || parsed.check === "X") continue; // completed
+		if (parsed.start === undefined) continue;
 
-		if (
-			rangeMatch?.groups &&
-			rangeMatch.groups.start !== undefined &&
-			rangeMatch.groups.end !== undefined &&
-			rangeMatch.groups.text !== undefined
-		) {
-			const checkbox = rangeMatch.groups.checkbox
-				? rangeMatch.groups.checkbox.trim()
-				: "";
-			const isCompleted = checkbox === "x" || checkbox === "X";
-			if (isCompleted) continue;
+		const startTimeStr = parsed.start;
+		const taskText = parsed.content.trim();
+		const start = moment(`${todayStr} ${startTimeStr}`, "YYYY-MM-DD HH:mm");
+		const isStarted = now.isSameOrAfter(start);
+		const isUpcoming =
+			!isStarted &&
+			now.isSameOrAfter(start.clone().subtract(upcomingThreshold, "minutes"));
 
-			const startTimeStr = rangeMatch.groups.start;
-			const endTimeStr = rangeMatch.groups.end;
-			const taskText = rangeMatch.groups.text.trim();
-
-			const start = moment(`${todayStr} ${startTimeStr}`, "YYYY-MM-DD HH:mm");
+		if (parsed.kind === "range" && parsed.end !== undefined) {
+			const endTimeStr = parsed.end;
 			const end = moment(`${todayStr} ${endTimeStr}`, "YYYY-MM-DD HH:mm");
-
-			const isStarted = now.isSameOrAfter(start);
 			const isWithinRange = now.isBetween(start, end, null, "[]");
-			const isUpcoming =
-				!isStarted &&
-				now.isSameOrAfter(start.clone().subtract(upcomingThreshold, "minutes"));
 
 			if (isStarted) {
 				activeTasks.push({
@@ -116,8 +126,8 @@ export async function getActiveTrackingTasks(
 					lineNumber: i,
 					isRangeActive: isWithinRange,
 					isCompleted: false,
-					isStartAbsolute: !!rangeMatch.groups.absStart,
-					isEndAbsolute: !!rangeMatch.groups.absEnd,
+					isStartAbsolute: !!parsed.startAbsolute,
+					isEndAbsolute: !!parsed.endAbsolute,
 				});
 			} else if (isUpcoming) {
 				activeTasks.push({
@@ -128,31 +138,11 @@ export async function getActiveTrackingTasks(
 					isRangeActive: false,
 					isCompleted: false,
 					isUpcoming: true,
-					isStartAbsolute: !!rangeMatch.groups.absStart,
-					isEndAbsolute: !!rangeMatch.groups.absEnd,
+					isStartAbsolute: !!parsed.startAbsolute,
+					isEndAbsolute: !!parsed.endAbsolute,
 				});
 			}
-		} else if (
-			startMatch?.groups &&
-			startMatch.groups.start !== undefined &&
-			startMatch.groups.text !== undefined
-		) {
-			const checkbox = startMatch.groups.checkbox
-				? startMatch.groups.checkbox.trim()
-				: "";
-			const isCompleted = checkbox === "x" || checkbox === "X";
-			if (isCompleted) continue;
-
-			const startTimeStr = startMatch.groups.start;
-			const taskText = startMatch.groups.text.trim();
-
-			const start = moment(`${todayStr} ${startTimeStr}`, "YYYY-MM-DD HH:mm");
-			const isStarted = now.isSameOrAfter(start);
-
-			const isUpcoming =
-				!isStarted &&
-				now.isSameOrAfter(start.clone().subtract(upcomingThreshold, "minutes"));
-
+		} else if (parsed.kind === "startOnly") {
 			if (isStarted) {
 				const diffMinutes = now.diff(start, "minutes");
 				const isWithinThreshold = diffMinutes < warningThreshold;
@@ -163,7 +153,7 @@ export async function getActiveTrackingTasks(
 					lineNumber: i,
 					isRangeActive: isWithinThreshold,
 					isCompleted: false,
-					isStartAbsolute: !!startMatch.groups.absStart,
+					isStartAbsolute: !!parsed.startAbsolute,
 				});
 			} else if (isUpcoming) {
 				activeTasks.push({
@@ -173,7 +163,7 @@ export async function getActiveTrackingTasks(
 					isRangeActive: false,
 					isCompleted: false,
 					isUpcoming: true,
-					isStartAbsolute: !!startMatch.groups.absStart,
+					isStartAbsolute: !!parsed.startAbsolute,
 				});
 			}
 		}
@@ -449,96 +439,45 @@ export function updateBannerContent(
 	}
 }
 
+/**
+ * Complete the current task "now": mark it "[x]" and record the current time as
+ * its end. Branches on the line shape:
+ *  - Range / start-only  -> keep the start, set the end to now.
+ *  - End-only            -> set the actual end to now.
+ *  - Anything else       -> record an end-only range ("- [x] - hh:mm content"),
+ *                           since there is no known start time.
+ */
 export function completeThisTaskNow(editor: Editor) {
 	const cursor = editor.getCursor();
 	const lineIndex = cursor.line;
 	const lineText = editor.getLine(lineIndex);
 
 	const currentTime = moment().format("HH:mm");
+	const parsed = parseTaskLine(lineText);
 
-	// Pattern definitions for line parsing
-	const rangeRegex =
-		/^(?<indent>\s*)-\s*(?:\[\s*.\s*\])?\s*(?<absStart>!)?(?<start>\d{2}:\d{2})\s*-\s*(?<end>\d{2}:\d{2})(?<absEnd>!)?\s*(?<content>.*)$/;
-	const startOnlyRegex =
-		/^(?<indent>\s*)-\s*(?:\[\s*.\s*\])?\s*(?<absStart>!)?(?<start>\d{2}:\d{2})\s*(?<content>.*)$/;
-	const taskRegex = /^(?<indent>\s*)-\s*\[\s*.\s*\]\s*(?<content>.*)$/;
-	const bulletRegex = /^(?<indent>\s*)-\s*(?<content>.*)$/;
+	let newLineText: string;
 
-	let newLineText = "";
-
-	const rangeMatch = lineText.match(rangeRegex);
-	const startMatch = lineText.match(startOnlyRegex);
-	const taskMatch = lineText.match(taskRegex);
-	const bulletMatch = lineText.match(bulletRegex);
-
-	if (
-		rangeMatch?.groups &&
-		rangeMatch.groups.indent !== undefined &&
-		rangeMatch.groups.start !== undefined &&
-		rangeMatch.groups.content !== undefined
-	) {
-		const indent = rangeMatch.groups.indent;
-		const startTime = rangeMatch.groups.start;
-		const content = rangeMatch.groups.content;
-		const absStart = rangeMatch.groups.absStart ?? "";
-		const absEnd = rangeMatch.groups.absEnd ?? "";
-		newLineText = `${indent}- [x] ${absStart}${startTime} - ${currentTime}${absEnd} ${content}`;
-	} else if (
-		startMatch?.groups &&
-		startMatch.groups.indent !== undefined &&
-		startMatch.groups.start !== undefined &&
-		startMatch.groups.content !== undefined
-	) {
-		const indent = startMatch.groups.indent;
-		const startTime = startMatch.groups.start;
-		const content = startMatch.groups.content;
-		const absStart = startMatch.groups.absStart ?? "";
-		newLineText = `${indent}- [x] ${absStart}${startTime} - ${currentTime} ${content}`;
-	} else if (
-		taskMatch?.groups &&
-		taskMatch.groups.indent !== undefined &&
-		taskMatch.groups.content !== undefined
-	) {
-		const indent = taskMatch.groups.indent;
-		const content = taskMatch.groups.content;
-		// No start time exists, so record an end-only range: "- [x] - hh:mm"
-		newLineText = `${indent}- [x] - ${currentTime} ${content}`;
-	} else if (
-		bulletMatch?.groups &&
-		bulletMatch.groups.indent !== undefined &&
-		bulletMatch.groups.content !== undefined
-	) {
-		const indent = bulletMatch.groups.indent;
-		const content = bulletMatch.groups.content;
-		newLineText = `${indent}- [x] - ${currentTime} ${content}`;
+	if (parsed?.kind === "range" && parsed.start !== undefined) {
+		const sAbs = absoluteFlag(parsed.startAbsolute);
+		const eAbs = absoluteFlag(parsed.endAbsolute);
+		newLineText = `${parsed.indent}- [x] ${sAbs}${parsed.start} - ${currentTime}${eAbs} ${parsed.content}`;
+	} else if (parsed?.kind === "startOnly" && parsed.start !== undefined) {
+		const sAbs = absoluteFlag(parsed.startAbsolute);
+		newLineText = `${parsed.indent}- [x] ${sAbs}${parsed.start} - ${currentTime} ${parsed.content}`;
+	} else if (parsed) {
+		// endOnly / relative / task / bullet: no usable start time, so record an
+		// end-only range: "- [x] - hh:mm".
+		newLineText = `${parsed.indent}- [x] - ${currentTime} ${parsed.content}`;
 	} else {
+		// Plain text (no list marker).
 		const content = lineText.trim();
-		const indentMatch = lineText.match(/^(\s*)/);
-		const indent = indentMatch?.[1] || "";
-		if (content) {
-			newLineText = `${indent}- [x] - ${currentTime} ${content}`;
-		} else {
-			newLineText = `${indent}- [x] - ${currentTime} `;
-		}
+		const indent = lineText.match(/^(\s*)/)?.[1] ?? "";
+		newLineText = content
+			? `${indent}- [x] - ${currentTime} ${content}`
+			: `${indent}- [x] - ${currentTime} `;
 	}
 
 	editor.setLine(lineIndex, newLineText);
-}
-
-// Rebuild the checkbox prefix (e.g. "[x] ") from a captured checkbox char,
-// preserving the original state. Returns "" when the task has no checkbox.
-function buildCheckboxPrefix(check: string | undefined): string {
-	return check !== undefined ? `[${check}] ` : "";
-}
-
-// Parse a relative duration token (e.g. "10m", "2h", "1h30m", "90m") into minutes.
-function parseRelativeDurationToMinutes(dur: string): number {
-	let total = 0;
-	const h = dur.match(/(\d+)h/);
-	const m = dur.match(/(\d+)m/);
-	if (h?.[1]) total += parseInt(h[1], 10) * 60;
-	if (m?.[1]) total += parseInt(m[1], 10);
-	return total;
 }
 
 /**
@@ -557,86 +496,58 @@ export function startThisTaskNow(editor: Editor) {
 	const lineText = editor.getLine(lineIndex);
 
 	const currentTime = moment().format("HH:mm");
+	const parsed = parseTaskLine(lineText);
 
-	// Ordered from most specific to least; range must precede start-only, and
-	// time/duration patterns must precede the bare task/bullet fallbacks.
-	const rangeRegex =
-		/^(?<indent>\s*)-\s*(?:\[\s*(?<check>.)\s*\])?\s*(?<absStart>!)?(?<start>\d{2}:\d{2})\s*-\s*(?<end>\d{2}:\d{2})(?<absEnd>!)?\s*(?<content>.*)$/;
-	const relativeRegex =
-		/^(?<indent>\s*)-\s*(?:\[\s*(?<check>.)\s*\])?\s*(?<absStart>!)?(?<dur>\d+h\d+m|\d+h|\d+m)(?=\s|$)\s*(?<content>.*)$/;
-	const startOnlyRegex =
-		/^(?<indent>\s*)-\s*(?:\[\s*(?<check>.)\s*\])?\s*(?<absStart>!)?(?<start>\d{2}:\d{2})\s*(?<content>.*)$/;
-	const taskRegex =
-		/^(?<indent>\s*)-\s*\[\s*(?<check>.)\s*\]\s*(?<content>.*)$/;
-	const bulletRegex = /^(?<indent>\s*)-\s*(?<content>.*)$/;
-
-	const rangeMatch = lineText.match(rangeRegex);
-	const relativeMatch = lineText.match(relativeRegex);
-	const startMatch = lineText.match(startOnlyRegex);
-	const taskMatch = lineText.match(taskRegex);
-	const bulletMatch = lineText.match(bulletRegex);
-
-	let newLineText = "";
+	let newLineText: string;
 
 	if (
-		rangeMatch?.groups &&
-		rangeMatch.groups.indent !== undefined &&
-		rangeMatch.groups.start !== undefined &&
-		rangeMatch.groups.end !== undefined &&
-		rangeMatch.groups.content !== undefined
+		parsed?.kind === "range" &&
+		parsed.start !== undefined &&
+		parsed.end !== undefined
 	) {
-		const g = rangeMatch.groups;
-		const start = moment(g.start, "HH:mm");
-		const end = moment(g.end, "HH:mm");
+		// Shift both ends to keep the original duration.
+		const start = moment(parsed.start, "HH:mm");
+		const end = moment(parsed.end, "HH:mm");
 		let durationMin = end.diff(start, "minutes");
 		if (durationMin < 0) durationMin += 24 * 60; // treat as overnight range
 
 		const newEnd = moment().add(durationMin, "minutes").format("HH:mm");
-		const cb = buildCheckboxPrefix(g.check);
-		const absStart = g.absStart ?? "";
-		const absEnd = g.absEnd ?? "";
-		newLineText = `${g.indent}- ${cb}${absStart}${currentTime} - ${newEnd}${absEnd} ${g.content}`;
+		const cb = buildCheckboxPrefix(parsed.check);
+		const sAbs = absoluteFlag(parsed.startAbsolute);
+		const eAbs = absoluteFlag(parsed.endAbsolute);
+		newLineText = `${parsed.indent}- ${cb}${sAbs}${currentTime} - ${newEnd}${eAbs} ${parsed.content}`;
 	} else if (
-		relativeMatch?.groups &&
-		relativeMatch.groups.indent !== undefined &&
-		relativeMatch.groups.dur !== undefined &&
-		relativeMatch.groups.content !== undefined
+		parsed?.kind === "relative" &&
+		parsed.durationMinutes !== undefined
 	) {
-		const g = relativeMatch.groups;
-		const durationMin = parseRelativeDurationToMinutes(g.dur ?? "");
-		const endStr = moment().add(durationMin, "minutes").format("HH:mm");
-		const cb = buildCheckboxPrefix(g.check);
-		const absStart = g.absStart ?? "";
-		newLineText = `${g.indent}- ${cb}${absStart}${currentTime} - ${endStr} ${g.content}`;
-	} else if (
-		startMatch?.groups &&
-		startMatch.groups.indent !== undefined &&
-		startMatch.groups.start !== undefined &&
-		startMatch.groups.content !== undefined
-	) {
-		const g = startMatch.groups;
-		const cb = buildCheckboxPrefix(g.check);
-		const absStart = g.absStart ?? "";
-		newLineText = `${g.indent}- ${cb}${absStart}${currentTime} ${g.content}`;
-	} else if (
-		taskMatch?.groups &&
-		taskMatch.groups.indent !== undefined &&
-		taskMatch.groups.content !== undefined
-	) {
-		const g = taskMatch.groups;
-		const cb = buildCheckboxPrefix(g.check);
-		newLineText = `${g.indent}- ${cb}${currentTime} ${g.content}`;
-	} else if (
-		bulletMatch?.groups &&
-		bulletMatch.groups.indent !== undefined &&
-		bulletMatch.groups.content !== undefined
-	) {
-		const g = bulletMatch.groups;
-		newLineText = `${g.indent}- [ ] ${currentTime} ${g.content}`;
+		// Expand "10m" into an absolute range now .. now+duration.
+		const endStr = moment()
+			.add(parsed.durationMinutes, "minutes")
+			.format("HH:mm");
+		const cb = buildCheckboxPrefix(parsed.check);
+		const sAbs = absoluteFlag(parsed.startAbsolute);
+		newLineText = `${parsed.indent}- ${cb}${sAbs}${currentTime} - ${endStr} ${parsed.content}`;
+	} else if (parsed?.kind === "endOnly" && parsed.end !== undefined) {
+		// Give the "…until HH:MM" task a real start (now), keeping the planned end.
+		const cb = buildCheckboxPrefix(parsed.check);
+		const eAbs = absoluteFlag(parsed.endAbsolute);
+		newLineText = `${parsed.indent}- ${cb}${currentTime} - ${parsed.end}${eAbs} ${parsed.content}`;
+	} else if (parsed?.kind === "startOnly") {
+		// Replace the start time with now.
+		const cb = buildCheckboxPrefix(parsed.check);
+		const sAbs = absoluteFlag(parsed.startAbsolute);
+		newLineText = `${parsed.indent}- ${cb}${sAbs}${currentTime} ${parsed.content}`;
+	} else if (parsed?.kind === "task") {
+		// Checkbox but no time: add the start time, keep the checkbox.
+		const cb = buildCheckboxPrefix(parsed.check);
+		newLineText = `${parsed.indent}- ${cb}${currentTime} ${parsed.content}`;
+	} else if (parsed?.kind === "bullet") {
+		// Plain bullet: turn it into a timed task.
+		newLineText = `${parsed.indent}- [ ] ${currentTime} ${parsed.content}`;
 	} else {
+		// Plain text (no list marker).
 		const content = lineText.trim();
-		const indentMatch = lineText.match(/^(\s*)/);
-		const indent = indentMatch?.[1] ?? "";
+		const indent = lineText.match(/^(\s*)/)?.[1] ?? "";
 		newLineText = content
 			? `${indent}- [ ] ${currentTime} ${content}`
 			: `${indent}- [ ] ${currentTime} `;

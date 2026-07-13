@@ -136,6 +136,14 @@ describe("setTaskStartTime", () => {
 			);
 		});
 	});
+
+	describe("end-only task (gets a real start, keeping the planned end)", () => {
+		it("turns '- - 12:00' into a 'now - 12:00' range", () => {
+			expect(run(startThisTaskNow, "- - 12:00 Task")).toBe(
+				"- 10:45 - 12:00 Task",
+			);
+		});
+	});
 });
 
 describe("toggleTaskTime (sets end time and completes)", () => {
@@ -175,5 +183,15 @@ describe("toggleTaskTime (sets end time and completes)", () => {
 
 	it("completes plain text as an end-only range", () => {
 		expect(run(completeThisTaskNow, "hello")).toBe("- [x] - 10:45 hello");
+	});
+
+	it("completes an end-only task by setting the actual end to now", () => {
+		expect(run(completeThisTaskNow, "- - 12:00 Task")).toBe(
+			"- [x] - 10:45 Task",
+		);
+	});
+
+	it("completes a relative-duration task, dropping the planned duration", () => {
+		expect(run(completeThisTaskNow, "- 10m Task")).toBe("- [x] - 10:45 Task");
 	});
 });
