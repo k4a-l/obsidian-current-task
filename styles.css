@@ -19,7 +19,7 @@
 	right: 0;
 	height: 32px;
 	z-index: 5;
-	padding: 0 6px;
+	padding: 0 6px 0px 0px;
 	background-color: var(--background-secondary-alt);
 	border-bottom: 1px solid var(--background-modifier-border);
 	display: flex;
@@ -204,4 +204,33 @@
 .k4a-banner-warning-text {
 	color: var(--text-warning);
 	font-weight: bold;
+}
+
+/* 共通の現在時刻セル。横スクロールしても左端に残す */
+.k4a-banner-now {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+    padding-left: 6px;
+	height: 100%;
+	flex-shrink: 0;
+	font-weight: bold;
+	position: sticky;
+	left: 0;
+	z-index: 1;
+	padding-right: 8px;
+	margin-right: 6px;
+	border-right: 1px solid var(--background-modifier-border);
+}
+
+.k4a-banner-now-value {
+	font-family: var(--font-monospace);
+}
+
+/* 経過時間の後ろに続く想定時間 "(30m)" */
+.k4a-banner-planned {
+	font-family: var(--font-monospace);
+	font-weight: normal;
+	/* opacity: 0.6; */
+	margin-left: 3px;
 }

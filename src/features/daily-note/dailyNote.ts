@@ -260,7 +260,30 @@ export function calculateElapsedTime(
 	const minutes = diffDuration.minutes();
 
 	if (hours > 0) {
-		return `${hours}h ${minutes}m`;
+		return `${hours}h${minutes}m`;
+	}
+	return `${minutes}m`;
+}
+
+/**
+ * The planned duration of a range task (end - start), formatted like the elapsed
+ * time ("30m", "1h 0m"). Handles an overnight range (end earlier than start).
+ */
+export function calculatePlannedTime(
+	startTimeStr: string,
+	endTimeStr: string,
+): string {
+	const start = moment(startTimeStr, "HH:mm");
+	const end = moment(endTimeStr, "HH:mm");
+	let diffMs = end.diff(start);
+	if (diffMs < 0) diffMs += 24 * 60 * 60 * 1000; // overnight range
+
+	const diffDuration = moment.duration(diffMs);
+	const hours = Math.floor(diffDuration.asHours());
+	const minutes = diffDuration.minutes();
+
+	if (hours > 0) {
+		return `${hours}h${minutes}m`;
 	}
 	return `${minutes}m`;
 }
@@ -331,6 +354,11 @@ export function updateBannerContent(
 		if (activeTasks.length > 0) {
 			bannerEl.className = "k4a-tasks-timer-banner cm-s-obsidian is-active";
 
+			// Shared current-time cell, pinned to the left of the strip.
+			const nowEl = bannerEl.createDiv({ cls: "k4a-banner-now" });
+			const nowValueEl = nowEl.createSpan({ cls: "k4a-banner-now-value" });
+			nowValueEl.textContent = moment().format("HH:mm");
+
 			for (let i = 0; i < activeTasks.length; i++) {
 				const task = activeTasks[i];
 				if (!task) continue;
@@ -379,6 +407,15 @@ export function updateBannerContent(
 				);
 				timerTextEl.textContent = elapsedStr;
 
+				// 想定時間（レンジタスクのみ）を経過時間の後に "(30m)" 形式で表示
+				if (task.endTime) {
+					const plannedStr = calculatePlannedTime(task.startTime, task.endTime);
+					timerEl.createSpan({
+						cls: "k4a-banner-planned",
+						text: `(${plannedStr})`,
+					});
+				}
+
 				// 経過時間とタスク名の間の垂直区切り線
 				leftContainer.createSpan({
 					cls: "k4a-banner-divider",
@@ -414,6 +451,15 @@ export function updateBannerContent(
 		return activeTasks;
 	} else {
 		if (activeTasks.length > 0) {
+			// Keep the shared current-time cell ticking.
+			const nowValueEl = bannerEl.querySelector(".k4a-banner-now-value");
+			if (nowValueEl instanceof HTMLElement) {
+				const nowStr = moment().format("HH:mm");
+				if (nowValueEl.textContent !== nowStr) {
+					nowValueEl.textContent = nowStr;
+				}
+			}
+
 			const timerEls = bannerEl.querySelectorAll(".k4a-banner-timer-text");
 			timerEls.forEach((el) => {
 				if (el instanceof HTMLElement) {

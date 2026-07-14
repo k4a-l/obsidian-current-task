@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type ActiveTrackingTask,
 	calculateElapsedTime,
+	calculatePlannedTime,
 	extractActiveTrackingTasks,
 	isTasksEqual,
 } from "../src/features/daily-note/dailyNote";
@@ -123,6 +124,20 @@ describe("extractActiveTrackingTasks", () => {
 			"First",
 			"Second",
 		]);
+	});
+});
+
+describe("calculatePlannedTime", () => {
+	it("formats a sub-hour range", () => {
+		expect(calculatePlannedTime("10:30", "11:00")).toBe("30m");
+	});
+
+	it("formats a multi-hour range", () => {
+		expect(calculatePlannedTime("09:00", "10:30")).toBe("1h 30m");
+	});
+
+	it("handles an overnight range", () => {
+		expect(calculatePlannedTime("23:30", "00:30")).toBe("1h 0m");
 	});
 });
 
