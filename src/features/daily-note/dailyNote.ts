@@ -242,7 +242,7 @@ export function calculateElapsedTime(
 		const hours = Math.floor(diffDuration.asHours());
 		const minutes = diffDuration.minutes();
 		if (hours > 0) {
-			return `-${hours}h ${minutes}m`;
+			return `-${hours}h${minutes}m`;
 		}
 		return `-${minutes}m`;
 	}

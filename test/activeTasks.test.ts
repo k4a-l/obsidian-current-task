@@ -133,11 +133,11 @@ describe("calculatePlannedTime", () => {
 	});
 
 	it("formats a multi-hour range", () => {
-		expect(calculatePlannedTime("09:00", "10:30")).toBe("1h 30m");
+		expect(calculatePlannedTime("09:00", "10:30")).toBe("1h30m");
 	});
 
 	it("handles an overnight range", () => {
-		expect(calculatePlannedTime("23:30", "00:30")).toBe("1h 0m");
+		expect(calculatePlannedTime("23:30", "00:30")).toBe("1h0m");
 	});
 });
 
@@ -147,16 +147,16 @@ describe("calculateElapsedTime", () => {
 	});
 
 	it("shows hours and minutes for a longer elapsed time", () => {
-		expect(calculateElapsedTime("09:00")).toBe("1h 45m");
+		expect(calculateElapsedTime("09:00")).toBe("1h45m");
 	});
 
 	it("shows a negative countdown for a future start", () => {
 		expect(calculateElapsedTime("11:00")).toBe("-15m");
-		expect(calculateElapsedTime("12:30")).toBe("-1h 45m");
+		expect(calculateElapsedTime("12:30")).toBe("-1h45m");
 	});
 
 	it("uses end - start for a completed task", () => {
-		expect(calculateElapsedTime("09:00", "10:00", true)).toBe("1h 0m");
+		expect(calculateElapsedTime("09:00", "10:00", true)).toBe("1h0m");
 	});
 
 	it("ignores the end time when not completed", () => {
