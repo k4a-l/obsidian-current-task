@@ -35,8 +35,7 @@ export class DailyNoteTaskManager {
 			}),
 		);
 
-		this.startTimer();
-		this.handleActiveLeafChange();
+		this.setEnabled(this.plugin.settings.enableDailyNoteBanner);
 	}
 
 	unload() {
@@ -44,7 +43,24 @@ export class DailyNoteTaskManager {
 		this.removeBanner();
 	}
 
+	/**
+	 * Turn the banner feature on or off at runtime.
+	 * Disabling removes the current banner and stops the refresh timer, so the
+	 * registered events stay harmless no-ops until it is re-enabled.
+	 */
+	setEnabled(enabled: boolean) {
+		if (enabled) {
+			this.startTimer();
+			this.handleActiveLeafChange();
+		} else {
+			this.stopTimer();
+			this.removeBanner();
+		}
+	}
+
 	private async handleActiveLeafChange() {
+		if (!this.plugin.settings.enableDailyNoteBanner) return;
+
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 
 		if (activeView === this.currentView) {

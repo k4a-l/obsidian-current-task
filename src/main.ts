@@ -73,6 +73,9 @@ export default class PluginClass extends Plugin {
 		});
 
 		this.updateStatusBar(0);
+		if (!this.settings.enableActiveNoteTasks) {
+			this.statusBarItemEl.hide();
+		}
 
 		// Event listeners for active note task extractor
 		this.registerEvent(
@@ -99,6 +102,23 @@ export default class PluginClass extends Plugin {
 		}
 	}
 
+	/**
+	 * Reflect the feature ON/OFF settings without requiring a plugin reload.
+	 * Turning the active note feature off closes its panel and hides the status
+	 * bar item; turning it back on re-runs the extraction.
+	 */
+	applyFeatureToggles() {
+		this.dailyNoteTaskManager.setEnabled(this.settings.enableDailyNoteBanner);
+
+		if (this.settings.enableActiveNoteTasks) {
+			this.statusBarItemEl.show();
+			this.extractAndDisplayTasks();
+		} else {
+			this.statusBarItemEl.hide();
+			this.app.workspace.detachLeavesOfType(VIEW_TYPE_ACTIVE_NOTE_TASK);
+		}
+	}
+
 	// Active note task extractor functions
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -109,6 +129,8 @@ export default class PluginClass extends Plugin {
 	}
 
 	async activateView() {
+		if (!this.settings.enableActiveNoteTasks) return;
+
 		const { workspace } = this.app;
 
 		let leaf: WorkspaceLeaf | null | undefined = null;
@@ -132,6 +154,8 @@ export default class PluginClass extends Plugin {
 	}
 
 	async extractAndDisplayTasks() {
+		if (!this.settings.enableActiveNoteTasks) return;
+
 		const currentFile = this.app.workspace.getActiveFile();
 		if (currentFile && currentFile.extension === "md") {
 			this.lastActiveFile = currentFile;
